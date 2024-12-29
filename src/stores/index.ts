@@ -484,6 +484,12 @@ export const useDisplayStore = defineStore(`display`, () => {
   const isShowUploadImgDialog = ref(false)
   const toggleShowUploadImgDialog = useToggle(isShowUploadImgDialog)
 
+  const isShowYuqueFormDialog = ref(false)
+  const toggleShowYuqueFormDialog = useToggle(isShowYuqueFormDialog)
+
+  const isShowLoadingDialog = ref(false)
+  const toggleShowLoadingDialog = useToggle(isShowLoadingDialog)
+
   return {
     isShowCssEditor,
     toggleShowCssEditor,
@@ -491,5 +497,9 @@ export const useDisplayStore = defineStore(`display`, () => {
     toggleShowInsertFormDialog,
     isShowUploadImgDialog,
     toggleShowUploadImgDialog,
+    isShowYuqueFormDialog,
+    toggleShowYuqueFormDialog,
+    isShowLoadingDialog,
+    toggleShowLoadingDialog,
   }
 })

@@ -18,6 +18,7 @@ import {
   addPrefix,
   processClipboardContent,
 } from '@/utils'
+import cloudbase from '@cloudbase/js-sdk'
 import {
   ChevronDownIcon,
   Moon,
@@ -34,6 +35,24 @@ const emit = defineEmits([
   `startCopy`,
   `endCopy`,
 ])
+
+const cloudbaseApp = cloudbase.init({
+  env: `cloudbase-baas-8gm65qpx7ef8bc3f`,
+})
+
+const cloudbaseAuth = cloudbaseApp.auth({
+  persistence: `local`,
+})
+
+async function cloudbaseAppLogin() {
+  await cloudbaseAuth.signInAnonymously()
+  const loginState = await cloudbaseAuth.getLoginState()
+  return loginState
+}
+
+cloudbaseAppLogin().then((loginState) => {
+  console.log(loginState)
+})
 
 const formatItems = [
   {
@@ -131,6 +150,111 @@ function customStyle() {
   }, 50)
 }
 
+// Toast 相关状态
+const showToast = ref(false)
+const toastMessage = ref(``)
+const toastType = ref(`success`)
+
+// Toast 显示函数
+function showToastMessage(message: any, type = `success`) {
+  toastMessage.value = message
+  toastType.value = type
+  showToast.value = true
+
+  // 3秒后自动隐藏
+  setTimeout(() => {
+    showToast.value = false
+  }, 3000)
+}
+
+interface ProcessMarkdownParams {
+  markdownContent: string | undefined
+  token: string
+  repo: string
+}
+
+const isProcessing = ref(false)
+const currentImageIndex = ref(0)
+const totalImageCount = ref(0)
+
+async function processMarkdown(params: ProcessMarkdownParams) {
+  const { markdownContent, token, repo } = params
+  if (!markdownContent) {
+    return
+  }
+  // Regular expression to match Yuque image URLs
+  const yuqueImageRegex = /https:\/\/cdn\.nlark\.com\/yuque\/.*?\.png/g
+
+  // Find all Yuque image URLs in the markdown
+  const yuqueUrls = Array.from(markdownContent.matchAll(yuqueImageRegex)).map(match => match[0])
+
+  totalImageCount.value = yuqueUrls.length
+  isProcessing.value = true
+  currentImageIndex.value = 0
+
+  let processedContent = markdownContent
+  let hasError = false
+  // Process each URL
+  for (const yuqueUrl of yuqueUrls) {
+    try {
+      const response = await cloudbaseApp.callFunction({
+        name: `uploadYuqueImageToGithub`,
+        data: {
+          yuqueImageUrl: yuqueUrl,
+          token,
+          repo,
+          // token: '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',
+          // repo: 'Xutaotaotao/cloud_img',
+        },
+      })
+      processedContent = processedContent.replace(yuqueUrl, response.result)
+      currentImageIndex.value++
+    }
+    catch (error) {
+      console.error(`Error processing image ${yuqueUrl}:`, error)
+      hasError = true
+    }
+  }
+  isProcessing.value = false
+  if (hasError) {
+    showToastMessage(`图片处理完成，但有${totalImageCount.value - currentImageIndex.value}张图片处理失败`, `warning`)
+  }
+  else {
+    showToastMessage(`成功处理${totalImageCount.value}张图片`, `success`)
+  }
+  return processedContent
+}
+
+async function convertYuque() {
+  displayStore.toggleShowYuqueFormDialog(true)
+}
+
+async function handleYuqueFormSubmit(formData: { repo: string, token: string }) {
+  displayStore.toggleShowYuqueFormDialog()
+  displayStore.toggleShowLoadingDialog(true)
+  try {
+    const editor = toRaw(store.editor)
+    if (!editor)
+      return
+
+    const processedContent = await processMarkdown({
+      markdownContent: editor.getValue(),
+      token: formData.token,
+      repo: formData.repo,
+    })
+    if (!processedContent)
+      return
+
+    editor.setValue(processedContent)
+    editor.refresh()
+    store.posts[store.currentPostIndex].content = processedContent
+    store.editorRefresh()
+  }
+  catch (err) {
+    console.error(`Error:`, err)
+  }
+}
+
 const pickColorsContainer = useTemplateRef<HTMLElement | undefined>(
   `pickColorsContainer`,
 )
@@ -147,9 +271,7 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
         <MenubarTrigger> 格式 </MenubarTrigger>
         <MenubarContent class="w-60" align="start">
           <MenubarCheckboxItem
-            v-for="{ label, kbd, emitArgs } in formatItems"
-            :key="label"
-            @click="
+            v-for="{ label, kbd, emitArgs } in formatItems" :key="label" @click="
               emitArgs[0] === 'addFormat'
                 ? $emit(emitArgs[0], emitArgs[1])
                 : $emit(emitArgs[0])
@@ -157,20 +279,13 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
           >
             {{ label }}
             <MenubarShortcut>
-              <kbd
-                v-for="item in kbd"
-                :key="item"
-                class="mx-1 bg-gray-2 dark:bg-stone-9"
-              >
+              <kbd v-for="item in kbd" :key="item" class="mx-1 bg-gray-2 dark:bg-stone-9">
                 {{ item }}
               </kbd>
             </MenubarShortcut>
           </MenubarCheckboxItem>
           <MenubarSeparator />
-          <MenubarCheckboxItem
-            :checked="isCiteStatus"
-            @click="citeStatusChanged()"
-          >
+          <MenubarCheckboxItem :checked="isCiteStatus" @click="citeStatusChanged()">
             微信外链转底部引用
           </MenubarCheckboxItem>
         </MenubarContent>
@@ -180,20 +295,10 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
       <HelpDropdown />
     </Menubar>
 
-    <Button
-      v-if="!store.isOpenPostSlider"
-      variant="outline"
-      class="mr-2"
-      @click="store.isOpenPostSlider = true"
-    >
+    <Button v-if="!store.isOpenPostSlider" variant="outline" class="mr-2" @click="store.isOpenPostSlider = true">
       <PanelLeftOpen class="size-4" />
     </Button>
-    <Button
-      v-else
-      variant="outline"
-      class="mr-2"
-      @click="store.isOpenPostSlider = false"
-    >
+    <Button v-else variant="outline" class="mr-2" @click="store.isOpenPostSlider = false">
       <PanelLeftClose class="size-4" />
     </Button>
     <Popover>
@@ -208,14 +313,9 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
             <h2>主题</h2>
             <div class="grid grid-cols-3 justify-items-center gap-2">
               <Button
-                v-for="{ label, value } in themeOptions"
-                :key="value"
-                class="w-full"
-                variant="outline"
-                :class="{
+                v-for="{ label, value } in themeOptions" :key="value" class="w-full" variant="outline" :class="{
                   'border-black dark:border-white': store.theme === value,
-                }"
-                @click="store.themeChanged(value)"
+                }" @click="store.themeChanged(value)"
               >
                 {{ label }}
               </Button>
@@ -225,14 +325,10 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
             <h2>字体</h2>
             <div class="grid grid-cols-3 justify-items-center gap-2">
               <Button
-                v-for="{ label, value } in fontFamilyOptions"
-                :key="value"
-                variant="outline"
-                class="w-full"
+                v-for="{ label, value } in fontFamilyOptions" :key="value" variant="outline" class="w-full"
                 :class="{
                   'border-black dark:border-white': store.fontFamily === value,
-                }"
-                @click="store.fontChanged(value)"
+                }" @click="store.fontChanged(value)"
               >
                 {{ label }}
               </Button>
@@ -242,14 +338,9 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
             <h2>字号</h2>
             <div class="grid grid-cols-5 justify-items-center gap-2">
               <Button
-                v-for="{ value, desc } in fontSizeOptions"
-                :key="value"
-                variant="outline"
-                class="w-full"
-                :class="{
+                v-for="{ value, desc } in fontSizeOptions" :key="value" variant="outline" class="w-full" :class="{
                   'border-black dark:border-white': store.fontSize === value,
-                }"
-                @click="store.sizeChanged(value)"
+                }" @click="store.sizeChanged(value)"
               >
                 {{ desc }}
               </Button>
@@ -259,19 +350,13 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
             <h2>主题色</h2>
             <div class="grid grid-cols-3 justify-items-center gap-2">
               <Button
-                v-for="{ label, value } in colorOptions"
-                :key="value"
-                class="w-full"
-                variant="outline"
-                :class="{
+                v-for="{ label, value } in colorOptions" :key="value" class="w-full" variant="outline" :class="{
                   'border-black dark:border-white':
                     store.primaryColor === value,
-                }"
-                @click="store.colorChanged(value)"
+                }" @click="store.colorChanged(value)"
               >
                 <span
-                  class="mr-2 inline-block h-4 w-4 rounded-full"
-                  :style="{
+                  class="mr-2 inline-block h-4 w-4 rounded-full" :style="{
                     background: value,
                   }"
                 />
@@ -283,33 +368,21 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
             <h2>自定义主题色</h2>
             <div ref="pickColorsContainer">
               <PickColors
-                v-if="pickColorsContainer"
-                v-model:value="primaryColor"
-                show-alpha
-                :format="format"
-                :format-options="formatOptions"
-                :theme="store.isDark ? 'dark' : 'light'"
-                :popup-container="pickColorsContainer"
-                @change="store.colorChanged"
+                v-if="pickColorsContainer" v-model:value="primaryColor" show-alpha :format="format"
+                :format-options="formatOptions" :theme="store.isDark ? 'dark' : 'light'"
+                :popup-container="pickColorsContainer" @change="store.colorChanged"
               />
             </div>
           </div>
           <div class="space-y-2">
             <h2>代码块主题</h2>
             <div>
-              <Select
-                v-model="store.codeBlockTheme"
-                @update:model-value="store.codeBlockThemeChanged"
-              >
+              <Select v-model="store.codeBlockTheme" @update:model-value="store.codeBlockThemeChanged">
                 <SelectTrigger>
                   <SelectValue placeholder="Select a fruit" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem
-                    v-for="{ label, value } in codeBlockThemeOptions"
-                    :key="label"
-                    :value="value"
-                  >
+                  <SelectItem v-for="{ label, value } in codeBlockThemeOptions" :key="label" :value="value">
                     {{ label }}
                   </SelectItem>
                 </SelectContent>
@@ -320,14 +393,9 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
             <h2>图注格式</h2>
             <div class="grid grid-cols-3 justify-items-center gap-2">
               <Button
-                v-for="{ label, value } in legendOptions"
-                :key="value"
-                class="w-full"
-                variant="outline"
-                :class="{
+                v-for="{ label, value } in legendOptions" :key="value" class="w-full" variant="outline" :class="{
                   'border-black dark:border-white': store.legend === value,
-                }"
-                @click="store.legendChanged(value)"
+                }" @click="store.legendChanged(value)"
               >
                 {{ label }}
               </Button>
@@ -338,22 +406,16 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
             <h2>Mac 代码块</h2>
             <div class="grid grid-cols-5 justify-items-center gap-2">
               <Button
-                class="w-full"
-                variant="outline"
-                :class="{
+                class="w-full" variant="outline" :class="{
                   'border-black dark:border-white': store.isMacCodeBlock,
-                }"
-                @click="!store.isMacCodeBlock && store.macCodeBlockChanged()"
+                }" @click="!store.isMacCodeBlock && store.macCodeBlockChanged()"
               >
                 开启
               </Button>
               <Button
-                class="w-full"
-                variant="outline"
-                :class="{
+                class="w-full" variant="outline" :class="{
                   'border-black dark:border-white': !store.isMacCodeBlock,
-                }"
-                @click="store.isMacCodeBlock && store.macCodeBlockChanged()"
+                }" @click="store.isMacCodeBlock && store.macCodeBlockChanged()"
               >
                 关闭
               </Button>
@@ -363,22 +425,16 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
             <h2>微信外链转底部引用</h2>
             <div class="grid grid-cols-5 justify-items-center gap-2">
               <Button
-                class="w-full"
-                variant="outline"
-                :class="{
+                class="w-full" variant="outline" :class="{
                   'border-black dark:border-white': store.isCiteStatus,
-                }"
-                @click="!store.isCiteStatus && store.citeStatusChanged()"
+                }" @click="!store.isCiteStatus && store.citeStatusChanged()"
               >
                 开启
               </Button>
               <Button
-                class="w-full"
-                variant="outline"
-                :class="{
+                class="w-full" variant="outline" :class="{
                   'border-black dark:border-white': !store.isCiteStatus,
-                }"
-                @click="store.isCiteStatus && store.citeStatusChanged()"
+                }" @click="store.isCiteStatus && store.citeStatusChanged()"
               >
                 关闭
               </Button>
@@ -388,22 +444,16 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
             <h2>段落首行缩进</h2>
             <div class="grid grid-cols-5 justify-items-center gap-2">
               <Button
-                class="w-full"
-                variant="outline"
-                :class="{
+                class="w-full" variant="outline" :class="{
                   'border-black dark:border-white': store.isUseIndent,
-                }"
-                @click="!store.isUseIndent && store.useIndentChanged()"
+                }" @click="!store.isUseIndent && store.useIndentChanged()"
               >
                 开启
               </Button>
               <Button
-                class="w-full"
-                variant="outline"
-                :class="{
+                class="w-full" variant="outline" :class="{
                   'border-black dark:border-white': !store.isUseIndent,
-                }"
-                @click="store.isUseIndent && store.useIndentChanged()"
+                }" @click="store.isUseIndent && store.useIndentChanged()"
               >
                 关闭
               </Button>
@@ -413,23 +463,17 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
             <h2>自定义 CSS 面板</h2>
             <div class="grid grid-cols-5 justify-items-center gap-2">
               <Button
-                class="w-full"
-                variant="outline"
-                :class="{
+                class="w-full" variant="outline" :class="{
                   'border-black dark:border-white':
                     displayStore.isShowCssEditor,
-                }"
-                @click="!displayStore.isShowCssEditor && customStyle()"
+                }" @click="!displayStore.isShowCssEditor && customStyle()"
               >
                 开启
               </Button>
               <Button
-                class="w-full"
-                variant="outline"
-                :class="{
+                class="w-full" variant="outline" :class="{
                   'border-black dark:border-white': !displayStore.isShowCssEditor,
-                }"
-                @click="displayStore.isShowCssEditor && customStyle()"
+                }" @click="displayStore.isShowCssEditor && customStyle()"
               >
                 关闭
               </Button>
@@ -439,22 +483,16 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
             <h2>编辑区位置</h2>
             <div class="grid grid-cols-5 justify-items-center gap-2">
               <Button
-                class="w-full"
-                variant="outline"
-                :class="{
+                class="w-full" variant="outline" :class="{
                   'border-black dark:border-white': store.isEditOnLeft,
-                }"
-                @click="!store.isEditOnLeft && store.toggleEditOnLeft()"
+                }" @click="!store.isEditOnLeft && store.toggleEditOnLeft()"
               >
                 左侧
               </Button>
               <Button
-                class="w-full"
-                variant="outline"
-                :class="{
+                class="w-full" variant="outline" :class="{
                   'border-black dark:border-white': !store.isEditOnLeft,
-                }"
-                @click="store.isEditOnLeft && store.toggleEditOnLeft()"
+                }" @click="store.isEditOnLeft && store.toggleEditOnLeft()"
               >
                 右侧
               </Button>
@@ -464,22 +502,16 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
             <h2>模式</h2>
             <div class="grid grid-cols-5 justify-items-center gap-2">
               <Button
-                class="w-full"
-                variant="outline"
-                :class="{
+                class="w-full" variant="outline" :class="{
                   'border-black dark:border-white': !isDark,
-                }"
-                @click="store.toggleDark(false)"
+                }" @click="store.toggleDark(false)"
               >
                 <Sun class="h-4 w-4" />
               </Button>
               <Button
-                class="w-full"
-                variant="outline"
-                :class="{
+                class="w-full" variant="outline" :class="{
                   'border-black dark:border-white': isDark,
-                }"
-                @click="store.toggleDark(true)"
+                }" @click="store.toggleDark(true)"
               >
                 <Moon class="h-4 w-4" />
               </Button>
@@ -495,9 +527,13 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
       </PopoverContent>
     </Popover>
 
-    <div
-      class="space-x-1 bg-background text-background-foreground mx-2 flex items-center border rounded-md"
-    >
+    <div class="space-x-1 bg-background text-background-foreground mx-2 flex items-center border rounded-md">
+      <Button variant="ghost" class="shadow-none" @click="convertYuque">
+        一键转换语雀图片
+      </Button>
+    </div>
+
+    <div class="space-x-1 bg-background text-background-foreground mx-2 flex items-center border rounded-md">
       <Button variant="ghost" class="shadow-none" @click="copy">
         复制
       </Button>
@@ -524,6 +560,13 @@ const formatOptions = ref<Format[]>([`rgb`, `hex`, `hsl`, `hsv`])
     <PostInfo />
 
     <Toaster rich-colors position="top-center" />
+    <YuqueFormDialog @submit="handleYuqueFormSubmit" />
+    <LoadingDialog :is-processing="isProcessing" :current-index="currentImageIndex" :total-images="totalImageCount" />
+    <Toast
+      :visible="showToast"
+      :message="toastMessage"
+      :type="toastType"
+    />
   </header>
 </template>
 
