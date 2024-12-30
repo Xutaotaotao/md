@@ -182,10 +182,8 @@ async function processMarkdown(params: ProcessMarkdownParams) {
   if (!markdownContent) {
     return
   }
-  // Regular expression to match Yuque image URLs
-  const yuqueImageRegex = /https:\/\/cdn\.nlark\.com\/yuque\/.*?\.png/g
+  const yuqueImageRegex = /https:\/\/cdn\.nlark\.com\/yuque\/.*?\.(png|jpg|jpeg|gif|webp)/gi
 
-  // Find all Yuque image URLs in the markdown
   const yuqueUrls = Array.from(markdownContent.matchAll(yuqueImageRegex)).map(match => match[0])
 
   totalImageCount.value = yuqueUrls.length
@@ -194,7 +192,6 @@ async function processMarkdown(params: ProcessMarkdownParams) {
 
   let processedContent = markdownContent
   let hasError = false
-  // Process each URL
   for (const yuqueUrl of yuqueUrls) {
     try {
       const response = await cloudbaseApp.callFunction({
@@ -203,8 +200,6 @@ async function processMarkdown(params: ProcessMarkdownParams) {
           yuqueImageUrl: yuqueUrl,
           token,
           repo,
-          // token: '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',
-          // repo: 'Xutaotaotao/cloud_img',
         },
       })
       processedContent = processedContent.replace(yuqueUrl, response.result)
